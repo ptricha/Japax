@@ -97,7 +97,7 @@ async function buildMoon({ scene, progress }: Ctx): Promise<Built> {
   scene.add(new THREE.HemisphereLight(0x1b2a44, 0x050505, 0.18)); // earthshine
   scene.add(sunDisc(sunDir, 700, 12, 0xffffff));
 
-  const { group: terr, H } = makeTerrain({ size: 260, seg: 320, amp: 3.2, freq: 0.022, craters: 46, craterMax: 22, seed: 7, flat: 7, low: new THREE.Color(0x4d4b48), high: new THREE.Color(0x9a9791), roughness: 1 });
+  const { group: terr, H } = await makeTerrain({ size: 260, seg: 320, amp: 3.2, freq: 0.022, craters: 46, craterMax: 22, seed: 7, flat: 7, low: new THREE.Color(0x4d4b48), high: new THREE.Color(0x9a9791), roughness: 1 });
   terr.name = "moon_ground";
   scene.add(terr);
   const ridge = makeRidge(165, 16, 0x6b6966, 3);
@@ -149,7 +149,7 @@ async function buildMars({ scene, progress }: Ctx): Promise<Built> {
   scene.add(new THREE.HemisphereLight(0xd8a37c, 0x5a2e1c, 0.75));
   scene.add(sunDisc(sunDir, 800, 11, 0xffe9cc));
 
-  const { group: terr, H } = makeTerrain({ size: 300, seg: 320, amp: 4.5, freq: 0.018, craters: 22, craterMax: 18, seed: 21, flat: 6, low: new THREE.Color(0x6e3a22), high: new THREE.Color(0xbb7a4c), roughness: 0.95 });
+  const { group: terr, H } = await makeTerrain({ size: 300, seg: 320, amp: 4.5, freq: 0.018, craters: 22, craterMax: 18, seed: 21, flat: 6, low: new THREE.Color(0x6e3a22), high: new THREE.Color(0xbb7a4c), roughness: 0.95 });
   terr.name = "mars_ground";
   scene.add(terr);
   const ridgeM = makeRidge(185, 22, 0x8f5535, 11, 1.8);
@@ -451,7 +451,7 @@ async function buildEarthSite({ scene }: Ctx): Promise<Built> {
   scene.add(new THREE.HemisphereLight(0xbcd8ff, 0x4d4333, 0.85));
   scene.add(sunDisc(sunDir, 800, 12, 0xfff3dc));
 
-  const { group: terr } = makeTerrain({ size: 300, seg: 300, amp: 2.4, freq: 0.02, craters: 0, craterMax: 1, seed: 33, flat: 8, low: new THREE.Color(0x6a5a3f), high: new THREE.Color(0xb09a6c), roughness: 0.96 });
+  const { group: terr } = await makeTerrain({ size: 300, seg: 300, amp: 2.4, freq: 0.02, craters: 0, craterMax: 1, seed: 33, flat: 8, low: new THREE.Color(0x6a5a3f), high: new THREE.Color(0xb09a6c), roughness: 0.96 });
   terr.name = "earth_ground";
   scene.add(terr);
   const ridgeE = makeRidge(170, 15, 0x6d7d86, 4, 2.0);
@@ -607,9 +607,21 @@ export default function ImmersiveScene({ env, fire, className = "h-[68vh] min-h-
   const [progress, setProgress] = useState(0);
   const { lang } = useLang();
 
+  // Build the scene only once the canvas is close to the viewport: a 3D scene below the fold no longer blocks first load
+  // (terrain generation, model decode, shader compile). Once near it stays built.
+  const [near, setNear] = useState(false);
   useEffect(() => {
     const el = host.current;
     if (!el) return;
+    if (typeof IntersectionObserver === "undefined") { setNear(true); return; }
+    const io = new IntersectionObserver(([en]) => { if (en.isIntersecting) { setNear(true); io.disconnect(); } }, { rootMargin: "400px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const el = host.current;
+    if (!el || !near) return;
     setState("loading");
     setProgress(0);
     let disposed = false;
@@ -793,7 +805,7 @@ export default function ImmersiveScene({ env, fire, className = "h-[68vh] min-h-
       renderer.forceContextLoss(); // give the GPU context back now; dispose() alone leaves it alive until GC
       renderer.domElement.remove();
     };
-  }, [env, fireOn, wide, overview]);
+  }, [env, fireOn, wide, overview, near]);
 
   useEffect(() => {
     if (fireRef.current) hfRef.current?.set(fireRef.current);
