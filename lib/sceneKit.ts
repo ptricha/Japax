@@ -14,11 +14,39 @@ export const MODEL_BYTES: Record<string, number> = {
   "/models/perseverance.glb": 1937636,
   "/models/iss_hd.glb": 15411000,
 };
+// Once a model is on the GPU its decoded texture bitmaps are dead weight (~450 MB for the ISS). Close them after upload.
+// A bitmap is only closed once every texture sharing it has uploaded. Geometry arrays are NOT freed: Raycaster reads
+// position, normal and uv (touch to burn, hover), and freeing them throws on every pick.
+function releaseTextureBitmaps(root: THREE.Object3D) {
+  const bySource = new Map<unknown, Set<THREE.Texture>>();
+  root.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    const mats = Array.isArray(m.material) ? m.material : [m.material];
+    for (const mat of mats) for (const v of Object.values(mat as unknown as Record<string, unknown>)) {
+      if (!(v instanceof THREE.Texture) || !v.image || typeof (v.image as ImageBitmap).close !== "function") continue;
+      let set = bySource.get(v.source);
+      if (!set) bySource.set(v.source, (set = new Set()));
+      set.add(v);
+    }
+  });
+  for (const [source, textures] of bySource) {
+    let pending = textures.size;
+    for (const t of textures) {
+      const prev = t.onUpdate;
+      t.onUpdate = (tex) => {
+        prev?.(tex);
+        if (--pending === 0) (source as { data?: { close?: () => void } }).data?.close?.();
+      };
+    }
+  }
+}
+
 export const loadModel = (url: string, progress: (fraction: number) => void) =>
   gl.loadAsync(url, (e) => {
     const total = e.lengthComputable && e.total ? e.total : MODEL_BYTES[url];
     if (total) progress(e.loaded / total);
-  });
+  }).then((g) => { releaseTextureBitmaps(g.scene); return g; });
 
 export const tex = async (url: string, srgb = true) => {
   const t = await tl.loadAsync(url);

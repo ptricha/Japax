@@ -18,6 +18,7 @@ Descarga total recorriendo todo: 19.7 MB.
 
 3. **DPR adaptativo en ImmersiveScene** (red de seguridad): si la escena sostiene <36 fps (media >28 ms en 60 frames) baja la resolución de render por pasos de 0.25 (0.5 si >60 ms), nunca por debajo de 1x y sin volver a subir en la sesión. Verificado: en render por software baja 2→1.75; en la RTX nunca se activa (calidad intacta).
 4. **`sizes` en los logos** (Nav y home): el logo de cabecera se servía a 1920 px para pintarse a ~115 px. Home 808→646 KB (logo 108→21 KB).
+5. **Cierre de bitmaps de textura tras subirlos a GPU** (`lib/sceneKit.ts`, `releaseTextureBitmaps`): memoria privada total del navegador en la vista ISS ~3000 MB → ~2590 MB (-14 %). Solo se cierra cuando todas las texturas que comparten esa fuente ya se subieron. Render idéntico, sin errores en las 6 escenas.
 
 ## Medido, sin cambios necesarios
 - Rutas sin 3D no cargan three.js (~700 KB totales); code-splitting ya correcto.
@@ -26,5 +27,6 @@ Descarga total recorriendo todo: 19.7 MB.
 ## Probado y DESCARTADO (no repetir)
 - **KTX2/Basis en iss_hd.glb**: baja la VRAM de 689→243 MB pero los WebP originales pesan ~0.5 bpp; KTX2 sin ruido visible sube el archivo de 15 MB a 45–60 MB (ETC1S-todo 21 MB mete ruido: 21–32 dB y oscurece paneles). Contradice "no perder calidad" y empeora la descarga.
 - **Re-codificar Draco** (gltf-transform draco/optimize): cambia el render (21 dB) por cuantización de vértices en superficies coplanares del ISS. **Nunca reexportar la geometría de los GLB**; editar solo a nivel binario.
+- **Liberar normales/uv de la geometría tras subirla**: rompe el traje espacial (error en cada frame). `Raycaster` lee position, normal y uv en cada impacto. Nunca liberar arrays de geometría.
 - Vídeos About: ya a 1.4 Mbps 1080p; poco margen sin pérdida visible.
 - Caché larga de assets: ya estaba en next.config.ts.
