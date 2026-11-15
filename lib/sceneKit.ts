@@ -14,11 +14,39 @@ export const MODEL_BYTES: Record<string, number> = {
   "/models/perseverance.glb": 1937636,
   "/models/iss_hd.glb": 15411000,
 };
+// Once a model is on the GPU its decoded texture bitmaps are dead weight (~450 MB for the ISS). Close them after upload.
+// A bitmap is only closed once every texture sharing it has uploaded. Geometry arrays are NOT freed: Raycaster reads
+// position, normal and uv (touch to burn, hover), and freeing them throws on every pick.
+function releaseTextureBitmaps(root: THREE.Object3D) {
+  const bySource = new Map<unknown, Set<THREE.Texture>>();
+  root.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    const mats = Array.isArray(m.material) ? m.material : [m.material];
+    for (const mat of mats) for (const v of Object.values(mat as unknown as Record<string, unknown>)) {
+      if (!(v instanceof THREE.Texture) || !v.image || typeof (v.image as ImageBitmap).close !== "function") continue;
+      let set = bySource.get(v.source);
+      if (!set) bySource.set(v.source, (set = new Set()));
+      set.add(v);
+    }
+  });
+  for (const [source, textures] of bySource) {
+    let pending = textures.size;
+    for (const t of textures) {
+      const prev = t.onUpdate;
+      t.onUpdate = (tex) => {
+        prev?.(tex);
+        if (--pending === 0) (source as { data?: { close?: () => void } }).data?.close?.();
+      };
+    }
+  }
+}
+
 export const loadModel = (url: string, progress: (fraction: number) => void) =>
   gl.loadAsync(url, (e) => {
     const total = e.lengthComputable && e.total ? e.total : MODEL_BYTES[url];
     if (total) progress(e.loaded / total);
-  });
+  }).then((g) => { releaseTextureBitmaps(g.scene); return g; });
 
 export const tex = async (url: string, srgb = true) => {
   const t = await tl.loadAsync(url);
@@ -133,19 +161,28 @@ export function shade(obj: THREE.Object3D, envIntensity = 1) {
 
 export type TerrainOpts = { size: number; seg: number; amp: number; freq: number; craters: number; craterMax: number; seed: number; flat: number; low: THREE.Color; high: THREE.Color; roughness: number };
 
-export function makeTerrain(o: TerrainOpts) {
+// Hand the main thread back to the browser so long generation loops never become one long blocking task.
+type Sched = { scheduler?: { yield?: () => Promise<void> } };
+const yieldToMain = (): Promise<void> => {
+  const sch = (globalThis as unknown as Sched).scheduler;
+  return sch?.yield ? sch.yield() : new Promise<void>((res) => setTimeout(res, 0));
+};
+
+export async function makeTerrain(o: TerrainOpts) {
   const r = rng(o.seed);
   const cr = Array.from({ length: o.craters }, () => {
     const rad = 3 + Math.pow(r(), 2.2) * o.craterMax;
-    return { x: (r() - 0.5) * o.size * 0.95, z: (r() - 0.5) * o.size * 0.95, r: rad, d: rad * (0.12 + r() * 0.1) };
+    return { x: (r() - 0.5) * o.size * 0.95, z: (r() - 0.5) * o.size * 0.95, r: rad, d: rad * (0.12 + r() * 0.1), reach2: (rad * 1.35) ** 2 };
   });
   const H = (x: number, z: number) => {
     let h = (fbm(x * o.freq + o.seed, z * o.freq + o.seed) - 0.5) * 2 * o.amp;
     h += (fbm(x * o.freq * 6, z * o.freq * 6, 3) - 0.5) * o.amp * 0.12;
     for (const c of cr) {
-      const d = Math.hypot(x - c.x, z - c.z);
+      const dx = x - c.x, dz = z - c.z, d2 = dx * dx + dz * dz;
+      if (d2 >= c.reach2) continue; // outside the crater's rim of influence: contributes nothing (skips the sqrt)
+      const d = Math.sqrt(d2);
       if (d < c.r) h -= c.d * (1 - (d / c.r) ** 2);
-      else if (d < c.r * 1.35) h += c.d * 0.28 * (1 - (d - c.r) / (c.r * 0.35));
+      else h += c.d * 0.28 * (1 - (d - c.r) / (c.r * 0.35));
     }
     const dc = Math.hypot(x, z);
     const k = Math.min(Math.max((dc - o.flat) / (o.flat * 3), 0), 1);
@@ -156,12 +193,14 @@ export function makeTerrain(o: TerrainOpts) {
   const pos = geo.attributes.position as THREE.BufferAttribute;
   const col = new Float32Array(pos.count * 3);
   const tmp = new THREE.Color();
+  let sliceStart = performance.now();
   for (let i = 0; i < pos.count; i++) {
+    if ((i & 255) === 255 && performance.now() - sliceStart > 12) { await yieldToMain(); sliceStart = performance.now(); }
     const x = pos.getX(i), z = pos.getZ(i), h = H(x, z);
     pos.setY(i, h);
     const t = Math.min(Math.max(h / (o.amp * 1.2) * 0.5 + 0.5 + (fbm(x * 0.9, z * 0.9, 3) - 0.5) * 0.5, 0), 1);
     tmp.copy(o.low).lerp(o.high, t);
-    col.set([tmp.r, tmp.g, tmp.b], i * 3);
+    col[i * 3] = tmp.r; col[i * 3 + 1] = tmp.g; col[i * 3 + 2] = tmp.b;
   }
   geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
   geo.computeVertexNormals();
@@ -171,10 +210,14 @@ export function makeTerrain(o: TerrainOpts) {
   cv.width = cv.height = 512;
   const cx = cv.getContext("2d")!;
   const img = cx.createImageData(512, 512);
-  for (let y = 0; y < 512; y++) for (let x = 0; x < 512; x++) {
-    const v = (vnoise(x / 6, y / 6) * 0.5 + vnoise(x / 2, y / 2) * 0.3 + hash(x, y) * 0.2) * 255;
-    const i = (y * 512 + x) * 4;
-    img.data[i] = img.data[i + 1] = img.data[i + 2] = v; img.data[i + 3] = 255;
+  sliceStart = performance.now();
+  for (let y = 0; y < 512; y++) {
+    if (performance.now() - sliceStart > 12) { await yieldToMain(); sliceStart = performance.now(); }
+    for (let x = 0; x < 512; x++) {
+      const v = (vnoise(x / 6, y / 6) * 0.5 + vnoise(x / 2, y / 2) * 0.3 + hash(x, y) * 0.2) * 255;
+      const i = (y * 512 + x) * 4;
+      img.data[i] = img.data[i + 1] = img.data[i + 2] = v; img.data[i + 3] = 255;
+    }
   }
   cx.putImageData(img, 0, 0);
   const bump = new THREE.CanvasTexture(cv);

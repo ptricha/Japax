@@ -97,7 +97,7 @@ async function buildMoon({ scene, progress }: Ctx): Promise<Built> {
   scene.add(new THREE.HemisphereLight(0x1b2a44, 0x050505, 0.18)); // earthshine
   scene.add(sunDisc(sunDir, 700, 12, 0xffffff));
 
-  const { group: terr, H } = makeTerrain({ size: 260, seg: 320, amp: 3.2, freq: 0.022, craters: 46, craterMax: 22, seed: 7, flat: 7, low: new THREE.Color(0x4d4b48), high: new THREE.Color(0x9a9791), roughness: 1 });
+  const { group: terr, H } = await makeTerrain({ size: 260, seg: 320, amp: 3.2, freq: 0.022, craters: 46, craterMax: 22, seed: 7, flat: 7, low: new THREE.Color(0x4d4b48), high: new THREE.Color(0x9a9791), roughness: 1 });
   terr.name = "moon_ground";
   scene.add(terr);
   const ridge = makeRidge(165, 16, 0x6b6966, 3);
@@ -149,7 +149,7 @@ async function buildMars({ scene, progress }: Ctx): Promise<Built> {
   scene.add(new THREE.HemisphereLight(0xd8a37c, 0x5a2e1c, 0.75));
   scene.add(sunDisc(sunDir, 800, 11, 0xffe9cc));
 
-  const { group: terr, H } = makeTerrain({ size: 300, seg: 320, amp: 4.5, freq: 0.018, craters: 22, craterMax: 18, seed: 21, flat: 6, low: new THREE.Color(0x6e3a22), high: new THREE.Color(0xbb7a4c), roughness: 0.95 });
+  const { group: terr, H } = await makeTerrain({ size: 300, seg: 320, amp: 4.5, freq: 0.018, craters: 22, craterMax: 18, seed: 21, flat: 6, low: new THREE.Color(0x6e3a22), high: new THREE.Color(0xbb7a4c), roughness: 0.95 });
   terr.name = "mars_ground";
   scene.add(terr);
   const ridgeM = makeRidge(185, 22, 0x8f5535, 11, 1.8);
@@ -451,7 +451,7 @@ async function buildEarthSite({ scene }: Ctx): Promise<Built> {
   scene.add(new THREE.HemisphereLight(0xbcd8ff, 0x4d4333, 0.85));
   scene.add(sunDisc(sunDir, 800, 12, 0xfff3dc));
 
-  const { group: terr } = makeTerrain({ size: 300, seg: 300, amp: 2.4, freq: 0.02, craters: 0, craterMax: 1, seed: 33, flat: 8, low: new THREE.Color(0x6a5a3f), high: new THREE.Color(0xb09a6c), roughness: 0.96 });
+  const { group: terr } = await makeTerrain({ size: 300, seg: 300, amp: 2.4, freq: 0.02, craters: 0, craterMax: 1, seed: 33, flat: 8, low: new THREE.Color(0x6a5a3f), high: new THREE.Color(0xb09a6c), roughness: 0.96 });
   terr.name = "earth_ground";
   scene.add(terr);
   const ridgeE = makeRidge(170, 15, 0x6d7d86, 4, 2.0);
@@ -607,16 +607,30 @@ export default function ImmersiveScene({ env, fire, className = "h-[68vh] min-h-
   const [progress, setProgress] = useState(0);
   const { lang } = useLang();
 
+  // Build the scene only once the canvas is close to the viewport: a 3D scene below the fold no longer blocks first load
+  // (terrain generation, model decode, shader compile). Once near it stays built.
+  const [near, setNear] = useState(false);
   useEffect(() => {
     const el = host.current;
     if (!el) return;
+    if (typeof IntersectionObserver === "undefined") { setNear(true); return; }
+    const io = new IntersectionObserver(([en]) => { if (en.isIntersecting) { setNear(true); io.disconnect(); } }, { rootMargin: "400px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const el = host.current;
+    if (!el || !near) return;
     setState("loading");
     setProgress(0);
     let disposed = false;
     let raf = 0;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, smallScreen() ? 1.5 : 2));
+    const maxDpr = Math.min(window.devicePixelRatio, smallScreen() ? 1.5 : 2);
+    let dpr = maxDpr;
+    renderer.setPixelRatio(dpr);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.domElement.style.cssText = "display:block;width:100%;height:100%;touch-action:none";
@@ -687,12 +701,29 @@ export default function ImmersiveScene({ env, fire, className = "h-[68vh] min-h-
       tween = { t0: performance.now(), dur: 1300, p0: camera.position.clone(), p1: p.clone(), q0: controls.target.clone(), q1: q.clone() };
     };
     let last = performance.now(), elapsed = 0;
+    // do not burn the GPU while the scene is scrolled out of view or the tab is hidden
+    let visible = true;
+    let warm = 0, slow = 0, frames = 0;
+    const io = new IntersectionObserver(([en]) => { visible = en.isIntersecting; }, { threshold: 0.02 });
+    io.observe(el);
     const loop = () => {
       raf = requestAnimationFrame(loop);
       const now = performance.now();
-      const dt = Math.min((now - last) / 1000, 0.05);
+      if (!visible || document.hidden) { last = now; return; }
+      const rawMs = now - last;
+      const dt = Math.min(rawMs / 1000, 0.05);
       last = now;
       if (!built) return;
+      // adaptive resolution safety net: a device that sustains < ~36 fps drops the render resolution step by step
+      // (never below 1x, never back up in this session). Capable GPUs never trigger it, so their quality is untouched.
+      if (warm++ > 60 && dpr > 1) {
+        slow += rawMs; frames++;
+        if (frames === 60) {
+          const avg = slow / frames;
+          if (avg > 28) { dpr = Math.max(1, dpr - (avg > 60 ? 0.5 : 0.25)); renderer.setPixelRatio(dpr); composer.setPixelRatio(dpr); resize(); warm = 0; }
+          slow = 0; frames = 0;
+        }
+      }
       elapsed += dt;
       built.update(dt, elapsed);
       if (tween) {
@@ -710,9 +741,8 @@ export default function ImmersiveScene({ env, fire, className = "h-[68vh] min-h-
     };
 
     (fireOn && !overview ? FIRE_BUILDERS : BUILDERS)[env]({ scene, renderer, progress: (f) => { if (!disposed) setProgress(Math.min(0.99, Math.max(0, f))); } })
-      .then((b) => {
+      .then(async (b) => {
         if (disposed) return;
-        built = b;
         renderer.toneMappingExposure = b.exposure;
         renderer.shadowMap.enabled = !!b.shadows;
         bloom.strength = fireOn && b.fire ? (b.fire.bloom ?? Math.max(b.bloom[0], 0.55)) : b.bloom[0]; bloom.radius = b.bloom[1]; bloom.threshold = b.bloom[2];
@@ -740,6 +770,10 @@ export default function ImmersiveScene({ env, fire, className = "h-[68vh] min-h-
           focus: () => { if (fc) flyTo(new THREE.Vector3(...fc.pos), new THREE.Vector3(...fc.target)); },
           overview: () => { if (home) flyTo(home.p, home.q); },
         };
+        // compile shaders in the background (parallel shader compile) so the first frame does not freeze the page
+        try { await renderer.compileAsync(scene, camera); } catch { /* first render compiles synchronously instead */ }
+        if (disposed) return;
+        built = b;
         setState("ready");
         if (onReadyRef.current) {
           labCleanup = onReadyRef.current({ scene, camera, controls, ignore, addUpdater: (fn) => { updaters.push(fn); }, raycast: hitAt });
@@ -754,6 +788,7 @@ export default function ImmersiveScene({ env, fire, className = "h-[68vh] min-h-
       hfRef.current = null;
       actions.current = null;
       cancelAnimationFrame(raf);
+      io.disconnect();
       renderer.domElement.removeEventListener("pointerdown", onDown);
       renderer.domElement.removeEventListener("pointerup", onUp);
       ro.disconnect();
@@ -773,7 +808,7 @@ export default function ImmersiveScene({ env, fire, className = "h-[68vh] min-h-
       renderer.forceContextLoss(); // give the GPU context back now; dispose() alone leaves it alive until GC
       renderer.domElement.remove();
     };
-  }, [env, fireOn, wide, overview]);
+  }, [env, fireOn, wide, overview, near]);
 
   useEffect(() => {
     if (fireRef.current) hfRef.current?.set(fireRef.current);

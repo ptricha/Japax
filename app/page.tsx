@@ -133,6 +133,7 @@ export default function Home() {
           width={1305}
           height={1334}
           priority
+          sizes="(min-width: 1024px) 288px, (min-width: 640px) 224px, 176px"
           className="mb-8 h-auto w-44 sm:w-56 lg:float-right lg:mb-0 lg:ml-8 lg:w-72"
         />
         <p className="eyebrow">{t.eyebrow}</p>
