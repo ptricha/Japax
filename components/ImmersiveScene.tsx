@@ -687,9 +687,14 @@ export default function ImmersiveScene({ env, fire, className = "h-[68vh] min-h-
       tween = { t0: performance.now(), dur: 1300, p0: camera.position.clone(), p1: p.clone(), q0: controls.target.clone(), q1: q.clone() };
     };
     let last = performance.now(), elapsed = 0;
+    // do not burn the GPU while the scene is scrolled out of view or the tab is hidden
+    let visible = true;
+    const io = new IntersectionObserver(([en]) => { visible = en.isIntersecting; }, { threshold: 0.02 });
+    io.observe(el);
     const loop = () => {
       raf = requestAnimationFrame(loop);
       const now = performance.now();
+      if (!visible || document.hidden) { last = now; return; }
       const dt = Math.min((now - last) / 1000, 0.05);
       last = now;
       if (!built) return;
@@ -754,6 +759,7 @@ export default function ImmersiveScene({ env, fire, className = "h-[68vh] min-h-
       hfRef.current = null;
       actions.current = null;
       cancelAnimationFrame(raf);
+      io.disconnect();
       renderer.domElement.removeEventListener("pointerdown", onDown);
       renderer.domElement.removeEventListener("pointerup", onUp);
       ro.disconnect();
