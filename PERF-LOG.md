@@ -19,6 +19,28 @@ Descarga total recorriendo todo: 19.7 MB.
 3. **DPR adaptativo en ImmersiveScene** (red de seguridad): si la escena sostiene <36 fps (media >28 ms en 60 frames) baja la resolución de render por pasos de 0.25 (0.5 si >60 ms), nunca por debajo de 1x y sin volver a subir en la sesión. Verificado: en render por software baja 2→1.75; en la RTX nunca se activa (calidad intacta).
 4. **`sizes` en los logos** (Nav y home): el logo de cabecera se servía a 1920 px para pintarse a ~115 px. Home 808→646 KB (logo 108→21 KB).
 5. **Cierre de bitmaps de textura tras subirlos a GPU** (`lib/sceneKit.ts`, `releaseTextureBitmaps`): memoria privada total del navegador en la vista ISS ~3000 MB → ~2590 MB (-14 %). Solo se cierra cuando todas las texturas que comparten esa fuente ya se subieron. Render idéntico, sin errores en las 6 escenas.
+6. **La escena 3D solo se construye cuando el canvas está a <400 px del viewport** (IntersectionObserver). Una escena bajo el pliegue ya no bloquea la carga inicial.
+7. **Generación de terreno troceada** (`makeTerrain` async con cesión de hilo cada 12 ms; textura de relieve 512x512 también) y bucle de cráteres sin `Math.hypot` (distancia² + descarte). Mismos cálculos, terreno idéntico.
+8. **`renderer.compileAsync`** antes del primer frame (compilación de shaders en paralelo, no bloquea).
+
+## Resultado final (Edge + RTX 5060, build de producción)
+| Escena | carga antes → ahora | descarga | draws/frame |
+|---|---|---|---|
+| Earth | 2053 → 1551 ms | – | 31 |
+| Whole Earth | 3057 → 3052 ms | – | 19 |
+| ISS interior | 1570 → 1536 ms | – | 93 |
+| ISS estación completa | 4457 → 4171 ms | 13.1 MB | 112 |
+| Base lunar | 2325 → 1556 ms | – | 337 |
+| Traje | 1983 → 1560 ms | 3.16 → 2.35 MB | 53 |
+- Descarga total recorriendo todo: 19.7 → 17.8 MB. Home: 808 → 646 KB.
+- Memoria privada del navegador en vista ISS: ~3000 → ~2590 MB.
+- Lighthouse móvil `/simulator`: score 72 → ~79, TBT 1740 → ~850-1050 ms (varía por ejecución). Resto de rutas: 99-100.
+- Verificado tras cada cambio: type-check OK, `test:lab` 76/76, build OK, sin errores de página en las 6 escenas, capturas sin diferencia visual.
+
+## Pendiente / ideas no aplicadas (necesitan decisión o medir en móvil real)
+- Base lunar 337 draws (157 de lm.glb ×2 por la pasada de sombras): fusionar mallas rompe la identificación por nombre del touch-to-burn; congelar el shadow map es arriesgado con el motor de componentes. Medir en un móvil real antes.
+- ISS completo: 2.47 M triángulos / 114 texturas 1024² (~595 MB VRAM). Solo bajaría con KTX2 (descartado, ver arriba) o con menos calidad.
+- Generación de terreno en Worker (requiere mover `hash`/`fbm` a un módulo sin DOM).
 
 ## Medido, sin cambios necesarios
 - Rutas sin 3D no cargan three.js (~700 KB totales); code-splitting ya correcto.
