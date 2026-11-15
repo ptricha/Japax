@@ -16,6 +16,13 @@ Descarga total recorriendo todo: 19.7 MB.
 1. **ImmersiveScene se pausa fuera de pantalla / pestaña oculta** (IntersectionObserver + document.hidden), igual que Flame3D. Sin cambio visual.
 2. **GLB sin copias de respaldo PNG/JPEG** (emu 3.3→2.4 MB, perseverance 4.8→1.9 MB, lm 0.68→0.61 MB). Se quitaron solo las copias de respaldo de texturas que ya llevan WebP; geometría Draco y píxeles WebP intactos. Verificado: render idéntico (PSNR ∞ / >78 dB). Descarga total 19.7→17.9 MB.
 
+3. **DPR adaptativo en ImmersiveScene** (red de seguridad): si la escena sostiene <36 fps (media >28 ms en 60 frames) baja la resolución de render por pasos de 0.25 (0.5 si >60 ms), nunca por debajo de 1x y sin volver a subir en la sesión. Verificado: en render por software baja 2→1.75; en la RTX nunca se activa (calidad intacta).
+4. **`sizes` en los logos** (Nav y home): el logo de cabecera se servía a 1920 px para pintarse a ~115 px. Home 808→646 KB (logo 108→21 KB).
+
+## Medido, sin cambios necesarios
+- Rutas sin 3D no cargan three.js (~700 KB totales); code-splitting ya correcto.
+- Flame3D / FlameCanvas ya se pausaban fuera de pantalla.
+
 ## Probado y DESCARTADO (no repetir)
 - **KTX2/Basis en iss_hd.glb**: baja la VRAM de 689→243 MB pero los WebP originales pesan ~0.5 bpp; KTX2 sin ruido visible sube el archivo de 15 MB a 45–60 MB (ETC1S-todo 21 MB mete ruido: 21–32 dB y oscurece paneles). Contradice "no perder calidad" y empeora la descarga.
 - **Re-codificar Draco** (gltf-transform draco/optimize): cambia el render (21 dB) por cuantización de vértices en superficies coplanares del ISS. **Nunca reexportar la geometría de los GLB**; editar solo a nivel binario.

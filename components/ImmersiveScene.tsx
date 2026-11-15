@@ -616,7 +616,9 @@ export default function ImmersiveScene({ env, fire, className = "h-[68vh] min-h-
     let raf = 0;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, smallScreen() ? 1.5 : 2));
+    const maxDpr = Math.min(window.devicePixelRatio, smallScreen() ? 1.5 : 2);
+    let dpr = maxDpr;
+    renderer.setPixelRatio(dpr);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.domElement.style.cssText = "display:block;width:100%;height:100%;touch-action:none";
@@ -689,15 +691,27 @@ export default function ImmersiveScene({ env, fire, className = "h-[68vh] min-h-
     let last = performance.now(), elapsed = 0;
     // do not burn the GPU while the scene is scrolled out of view or the tab is hidden
     let visible = true;
+    let warm = 0, slow = 0, frames = 0;
     const io = new IntersectionObserver(([en]) => { visible = en.isIntersecting; }, { threshold: 0.02 });
     io.observe(el);
     const loop = () => {
       raf = requestAnimationFrame(loop);
       const now = performance.now();
       if (!visible || document.hidden) { last = now; return; }
-      const dt = Math.min((now - last) / 1000, 0.05);
+      const rawMs = now - last;
+      const dt = Math.min(rawMs / 1000, 0.05);
       last = now;
       if (!built) return;
+      // adaptive resolution safety net: a device that sustains < ~36 fps drops the render resolution step by step
+      // (never below 1x, never back up in this session). Capable GPUs never trigger it, so their quality is untouched.
+      if (warm++ > 60 && dpr > 1) {
+        slow += rawMs; frames++;
+        if (frames === 60) {
+          const avg = slow / frames;
+          if (avg > 28) { dpr = Math.max(1, dpr - (avg > 60 ? 0.5 : 0.25)); renderer.setPixelRatio(dpr); composer.setPixelRatio(dpr); resize(); warm = 0; }
+          slow = 0; frames = 0;
+        }
+      }
       elapsed += dt;
       built.update(dt, elapsed);
       if (tween) {

@@ -143,7 +143,7 @@ export default function Nav() {
       <div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-4">
         <LangMenu lang={lang} setLang={setLang} label={t.language} />
         <Link href="/" className="flex shrink-0 items-center">
-          <Image src="/brand/japax-header-logo.png" alt="JaPax" width={1624} height={455} className="h-8 w-auto" priority />
+          <Image src="/brand/japax-header-logo.png" alt="JaPax" width={1624} height={455} sizes="115px" className="h-8 w-auto" priority />
         </Link>
 
         <nav aria-label={t.main} className="ml-auto hidden items-center gap-0.5 text-sm xl:flex">
