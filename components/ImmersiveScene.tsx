@@ -741,9 +741,8 @@ export default function ImmersiveScene({ env, fire, className = "h-[68vh] min-h-
     };
 
     (fireOn && !overview ? FIRE_BUILDERS : BUILDERS)[env]({ scene, renderer, progress: (f) => { if (!disposed) setProgress(Math.min(0.99, Math.max(0, f))); } })
-      .then((b) => {
+      .then(async (b) => {
         if (disposed) return;
-        built = b;
         renderer.toneMappingExposure = b.exposure;
         renderer.shadowMap.enabled = !!b.shadows;
         bloom.strength = fireOn && b.fire ? (b.fire.bloom ?? Math.max(b.bloom[0], 0.55)) : b.bloom[0]; bloom.radius = b.bloom[1]; bloom.threshold = b.bloom[2];
@@ -771,6 +770,10 @@ export default function ImmersiveScene({ env, fire, className = "h-[68vh] min-h-
           focus: () => { if (fc) flyTo(new THREE.Vector3(...fc.pos), new THREE.Vector3(...fc.target)); },
           overview: () => { if (home) flyTo(home.p, home.q); },
         };
+        // compile shaders in the background (parallel shader compile) so the first frame does not freeze the page
+        try { await renderer.compileAsync(scene, camera); } catch { /* first render compiles synchronously instead */ }
+        if (disposed) return;
+        built = b;
         setState("ready");
         if (onReadyRef.current) {
           labCleanup = onReadyRef.current({ scene, camera, controls, ignore, addUpdater: (fn) => { updaters.push(fn); }, raycast: hitAt });
